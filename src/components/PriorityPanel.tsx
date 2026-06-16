@@ -19,6 +19,19 @@ export const PriorityPanel: React.FC<{ isNight: boolean }> = ({ isNight }) => {
   const breakdownByPriority = useGameStore((state) => state.breakdownByPriority);
   const setBuildingPriority = useGameStore((state) => state.setBuildingPriority);
   const resetPriorities = useGameStore((state) => state.resetPriorities);
+  const [feedbackType, setFeedbackType] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (feedbackType) {
+      const t = setTimeout(() => setFeedbackType(null), 300);
+      return () => clearTimeout(t);
+    }
+  }, [feedbackType]);
+
+  const handlePriorityChange = (type: CellType, lvl: PriorityLevel) => {
+    setBuildingPriority(type, lvl);
+    setFeedbackType(type);
+  };
 
   const getEffectivePriority = (type: CellType): PriorityLevel => {
     if (priorityOverrides[type]) return priorityOverrides[type]!;
@@ -26,7 +39,7 @@ export const PriorityPanel: React.FC<{ isNight: boolean }> = ({ isNight }) => {
   };
 
   const maxPriority = Math.max(
-    ...(Object.values(breakdownByPriority).map((b) => b.consumption) as number[]),
+    ...(Object.values(breakdownByPriority).map((b) => Math.max(b.demand, b.powered)) as number[]),
     1
   );
 
@@ -54,8 +67,9 @@ export const PriorityPanel: React.FC<{ isNight: boolean }> = ({ isNight }) => {
           .map((level) => {
             const info = PRIORITY_INFO[level];
             const breakdown = breakdownByPriority[level];
-            const ratio = breakdown.consumption > 0 ? breakdown.powered / breakdown.consumption : 1;
-            const widthPct = maxPriority > 0 ? (breakdown.consumption / maxPriority) * 100 : 0;
+            const ratio = breakdown.demand > 0 ? breakdown.powered / breakdown.demand : 1;
+            const widthPct = maxPriority > 0 ? (breakdown.demand / maxPriority) * 100 : 0;
+            const poweredPct = maxPriority > 0 ? (breakdown.powered / maxPriority) * 100 : 0;
 
             return (
               <div key={level} className="space-y-1">
@@ -69,14 +83,17 @@ export const PriorityPanel: React.FC<{ isNight: boolean }> = ({ isNight }) => {
                   </div>
                   <span className="tabular-nums opacity-70">
                     {Math.round(breakdown.powered * 10) / 10} /{' '}
-                    {Math.round(breakdown.consumption * 10) / 10} 电
-                    {breakdown.consumption > 0 && (
+                    {Math.round(breakdown.demand * 10) / 10} 电
+                    {breakdown.demand > 0 && (
                       <span
-                        className="ml-1"
+                        className="ml-1 font-medium"
                         style={{ color: ratio >= 0.95 ? '#10B981' : ratio >= 0.7 ? '#F59E0B' : '#EF4444' }}
                       >
                         ({Math.round(ratio * 100)}%)
                       </span>
+                    )}
+                    {breakdown.demand === 0 && (
+                      <span className="ml-1 opacity-50">（无负载）</span>
                     )}
                   </span>
                 </div>
@@ -88,7 +105,7 @@ export const PriorityPanel: React.FC<{ isNight: boolean }> = ({ isNight }) => {
                   <div
                     className="h-full rounded-full absolute top-0 left-0 transition-all duration-500"
                     style={{
-                      width: `${(breakdown.powered / maxPriority) * 100}%`,
+                      width: `${poweredPct}%`,
                       background: info.color,
                     }}
                   />
@@ -114,16 +131,16 @@ export const PriorityPanel: React.FC<{ isNight: boolean }> = ({ isNight }) => {
                   {([1, 2, 3] as PriorityLevel[]).map((lvl) => (
                     <button
                       key={lvl}
-                      onClick={() => setBuildingPriority(type, lvl)}
-                      className={`w-7 h-6 rounded-lg text-[10px] font-bold transition-all duration-200 ${
+                      onClick={() => handlePriorityChange(type, lvl)}
+                      className={`w-7 h-6 rounded-lg text-[10px] font-bold transition-all duration-150 transform active:scale-95 ${
                         effective === lvl
                           ? 'text-white shadow-md scale-105'
                           : isNight
-                          ? 'bg-slate-700 text-slate-400 hover:bg-slate-600'
-                          : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
-                      }`}
+                          ? 'bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-slate-300'
+                          : 'bg-gray-100 text-gray-400 hover:bg-gray-200 hover:text-gray-600'
+                      } ${feedbackType === type && effective === lvl ? 'ring-2 ring-offset-1 ring-white/50' : ''}`}
                       style={effective === lvl ? { background: PRIORITY_INFO[lvl].color } : undefined}
-                      title={PRIORITY_INFO[lvl].name}
+                      title={`${PRIORITY_INFO[lvl].name} - ${PRIORITY_INFO[lvl].description}`}
                     >
                       {lvl}
                     </button>

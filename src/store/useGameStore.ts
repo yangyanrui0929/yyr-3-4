@@ -26,7 +26,7 @@ interface PersistedState {
   priorityOverrides: Partial<Record<GridCell['type'], PriorityLevel>>;
 }
 
-type PriorityBreakdown = Record<PriorityLevel, { consumption: number; powered: number }>;
+type PriorityBreakdown = Record<PriorityLevel, { consumption: number; powered: number; demand: number }>;
 
 interface GameState {
   grid: GridCell[][];
@@ -37,7 +37,11 @@ interface GameState {
   selectedTool: ToolType;
   poweredCells: Set<string>;
   totalGeneration: number;
+  totalDemand: number;
   totalConsumption: number;
+  houseDemand: number;
+  factoryDemand: number;
+  lightingDemand: number;
   houseConsumption: number;
   factoryConsumption: number;
   lightingConsumption: number;
@@ -122,8 +126,12 @@ function recalcGrid(
   const {
     poweredCells,
     totalGeneration,
+    totalDemand,
     totalConsumption,
     batteryCapacity,
+    houseDemand,
+    factoryDemand,
+    lightingDemand,
     houseConsumption,
     factoryConsumption,
     lightingConsumption,
@@ -149,8 +157,12 @@ function recalcGrid(
     newGrid,
     poweredCells,
     totalGeneration,
+    totalDemand,
     totalConsumption,
     batteryCapacity,
+    houseDemand,
+    factoryDemand,
+    lightingDemand,
     houseConsumption,
     factoryConsumption,
     lightingConsumption,
@@ -173,8 +185,12 @@ function initGame(): InitResult {
     newGrid,
     poweredCells,
     totalGeneration,
+    totalDemand,
     totalConsumption,
     batteryCapacity,
+    houseDemand,
+    factoryDemand,
+    lightingDemand,
     houseConsumption,
     factoryConsumption,
     lightingConsumption,
@@ -191,7 +207,11 @@ function initGame(): InitResult {
     selectedTool: 'windmill',
     poweredCells,
     totalGeneration,
+    totalDemand,
     totalConsumption,
+    houseDemand,
+    factoryDemand,
+    lightingDemand,
     houseConsumption,
     factoryConsumption,
     lightingConsumption,
@@ -253,7 +273,11 @@ export const useGameStore = create<GameState>((set, get) => ({
       grid: result.newGrid,
       poweredCells: result.poweredCells,
       totalGeneration: result.totalGeneration,
+      totalDemand: result.totalDemand,
       totalConsumption: result.totalConsumption,
+      houseDemand: result.houseDemand,
+      factoryDemand: result.factoryDemand,
+      lightingDemand: result.lightingDemand,
       houseConsumption: result.houseConsumption,
       factoryConsumption: result.factoryConsumption,
       lightingConsumption: result.lightingConsumption,
@@ -287,7 +311,11 @@ export const useGameStore = create<GameState>((set, get) => ({
       grid: result.newGrid,
       poweredCells: result.poweredCells,
       totalGeneration: result.totalGeneration,
+      totalDemand: result.totalDemand,
       totalConsumption: result.totalConsumption,
+      houseDemand: result.houseDemand,
+      factoryDemand: result.factoryDemand,
+      lightingDemand: result.lightingDemand,
       houseConsumption: result.houseConsumption,
       factoryConsumption: result.factoryConsumption,
       lightingConsumption: result.lightingConsumption,
@@ -321,7 +349,11 @@ export const useGameStore = create<GameState>((set, get) => ({
       grid: result.newGrid,
       poweredCells: result.poweredCells,
       totalGeneration: result.totalGeneration,
+      totalDemand: result.totalDemand,
       totalConsumption: result.totalConsumption,
+      houseDemand: result.houseDemand,
+      factoryDemand: result.factoryDemand,
+      lightingDemand: result.lightingDemand,
       houseConsumption: result.houseConsumption,
       factoryConsumption: result.factoryConsumption,
       lightingConsumption: result.lightingConsumption,
@@ -359,8 +391,12 @@ export const useGameStore = create<GameState>((set, get) => ({
     const {
       poweredCells,
       totalGeneration,
+      totalDemand,
       totalConsumption,
       batteryCapacity,
+      houseDemand,
+      factoryDemand,
+      lightingDemand,
       houseConsumption,
       factoryConsumption,
       lightingConsumption,
@@ -427,7 +463,11 @@ export const useGameStore = create<GameState>((set, get) => ({
       satisfaction: newSatisfaction,
       poweredCells,
       totalGeneration,
+      totalDemand,
       totalConsumption,
+      houseDemand,
+      factoryDemand,
+      lightingDemand,
       houseConsumption,
       factoryConsumption,
       lightingConsumption,
@@ -449,7 +489,11 @@ export const useGameStore = create<GameState>((set, get) => ({
       selectedTool: 'windmill',
       poweredCells: result.poweredCells,
       totalGeneration: result.totalGeneration,
+      totalDemand: result.totalDemand,
       totalConsumption: result.totalConsumption,
+      houseDemand: result.houseDemand,
+      factoryDemand: result.factoryDemand,
+      lightingDemand: result.lightingDemand,
       houseConsumption: result.houseConsumption,
       factoryConsumption: result.factoryConsumption,
       lightingConsumption: result.lightingConsumption,
@@ -480,7 +524,11 @@ export const useGameStore = create<GameState>((set, get) => ({
       grid: result.newGrid,
       poweredCells: result.poweredCells,
       totalGeneration: result.totalGeneration,
+      totalDemand: result.totalDemand,
       totalConsumption: result.totalConsumption,
+      houseDemand: result.houseDemand,
+      factoryDemand: result.factoryDemand,
+      lightingDemand: result.lightingDemand,
       houseConsumption: result.houseConsumption,
       factoryConsumption: result.factoryConsumption,
       lightingConsumption: result.lightingConsumption,
@@ -507,7 +555,11 @@ export const useGameStore = create<GameState>((set, get) => ({
       grid: result.newGrid,
       poweredCells: result.poweredCells,
       totalGeneration: result.totalGeneration,
+      totalDemand: result.totalDemand,
       totalConsumption: result.totalConsumption,
+      houseDemand: result.houseDemand,
+      factoryDemand: result.factoryDemand,
+      lightingDemand: result.lightingDemand,
       houseConsumption: result.houseConsumption,
       factoryConsumption: result.factoryConsumption,
       lightingConsumption: result.lightingConsumption,

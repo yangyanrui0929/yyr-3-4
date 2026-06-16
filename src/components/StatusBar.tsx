@@ -8,7 +8,11 @@ export const StatusBar: React.FC = () => {
   const {
     dayTime,
     totalGeneration,
+    totalDemand,
     totalConsumption,
+    houseDemand,
+    factoryDemand,
+    lightingDemand,
     houseConsumption,
     factoryConsumption,
     lightingConsumption,
@@ -87,6 +91,13 @@ export const StatusBar: React.FC = () => {
               <span className={`mx-1 ${isNight ? 'text-slate-500' : 'text-gray-400'}`}>/</span>
               <span className="text-red-400">-{Math.round(totalConsumption * 10) / 10}</span>
             </p>
+            {totalDemand > 0 && (
+              <p className="text-[10px] tabular-nums opacity-70">
+                供电 {Math.round(totalConsumption * 10) / 10} /{' '}
+                {Math.round(totalDemand * 10) / 10} (
+                {Math.round((totalConsumption / totalDemand) * 100)}%)
+              </p>
+            )}
             <p
               className={`text-xs font-semibold tabular-nums ${
                 netPower >= 0 ? 'text-green-500' : 'text-red-400'
@@ -105,18 +116,27 @@ export const StatusBar: React.FC = () => {
               <Home className="w-3 h-3 text-violet-400" />
               <span className="tabular-nums opacity-80">
                 {Math.round(houseConsumption * 10) / 10}
+                {houseDemand > 0 && (
+                  <span className="opacity-50">/{Math.round(houseDemand * 10) / 10}</span>
+                )}
               </span>
             </div>
             <div className="flex items-center gap-1">
               <Factory className="w-3 h-3 text-red-400" />
               <span className="tabular-nums opacity-80">
                 {Math.round(factoryConsumption * 10) / 10}
+                {factoryDemand > 0 && (
+                  <span className="opacity-50">/{Math.round(factoryDemand * 10) / 10}</span>
+                )}
               </span>
             </div>
             <div className="flex items-center gap-1">
               <Lightbulb className="w-3 h-3 text-orange-400" />
               <span className="tabular-nums opacity-80">
                 {Math.round(lightingConsumption * 10) / 10}
+                {lightingDemand > 0 && (
+                  <span className="opacity-50">/{Math.round(lightingDemand * 10) / 10}</span>
+                )}
               </span>
             </div>
           </div>

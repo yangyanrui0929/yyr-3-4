@@ -167,7 +167,7 @@ export function getBuildingPriority(
   if (overrides[type]) return overrides[type]!;
   const stats = BUILDING_STATS[type];
   if (!stats) return 1;
-  return (stats as typeof BUILDING_STATS.house).defaultPriority;
+  return (stats as { defaultPriority: PriorityLevel }).defaultPriority;
 }
 
 interface ConnectedCell {
@@ -186,15 +186,18 @@ export function calculatePowerNetwork(
 ): {
   poweredCells: Set<string>;
   totalGeneration: number;
+  totalDemand: number;
   totalConsumption: number;
   batteryCapacity: number;
+  houseDemand: number;
+  factoryDemand: number;
+  lightingDemand: number;
   houseConsumption: number;
   factoryConsumption: number;
   lightingConsumption: number;
-  breakdownByPriority: Record<PriorityLevel, { consumption: number; powered: number }>;
+  breakdownByPriority: Record<PriorityLevel, { consumption: number; powered: number; demand: number }>;
 } {
   let totalGeneration = 0;
-  let totalConsumption = 0;
   let batteryCapacity = 0;
   let houseCount = 0;
   let factoryCount = 0;
@@ -228,11 +231,11 @@ export function calculatePowerNetwork(
     }
   }
 
-  const houseConsumption = houseCount * getHouseConsumption(dayTime, BUILDING_STATS.house.consumption);
-  const factoryConsumption =
+  const houseDemand = houseCount * getHouseConsumption(dayTime, BUILDING_STATS.house.consumption);
+  const factoryDemand =
     factoryCount * getFactoryConsumption(dayTime, BUILDING_STATS.factory.consumption);
-  const lightingConsumption = getLightingConsumption(dayTime, houseCount, factoryCount);
-  totalConsumption = houseConsumption + factoryConsumption + lightingConsumption;
+  const lightingDemand = getLightingConsumption(dayTime, houseCount, factoryCount);
+  const totalDemand = houseDemand + factoryDemand + lightingDemand;
 
   const availableFromBatteries = Math.max(0, storedPower);
   const totalAvailable = totalGeneration + availableFromBatteries;
@@ -310,9 +313,7 @@ export function calculatePowerNetwork(
       if (canConnectFromCurrent && canConnectFromNeighbor) {
         visited.add(key);
         connectedCells.add(key);
-        if (neighbor.type === 'wire') {
-          queue.push({ x: nx, y: ny });
-        }
+        queue.push({ x: nx, y: ny });
       }
     }
   }
@@ -376,17 +377,37 @@ export function calculatePowerNetwork(
 
   const breakdownByPriority: Record<
     PriorityLevel,
-    { consumption: number; powered: number }
+    { consumption: number; powered: number; demand: number }
   > = {
-    1: { consumption: 0, powered: 0 },
-    2: { consumption: 0, powered: 0 },
-    3: { consumption: 0, powered: 0 },
+    1: { consumption: 0, powered: 0, demand: 0 },
+    2: { consumption: 0, powered: 0, demand: 0 },
+    3: { consumption: 0, powered: 0, demand: 0 },
   };
 
   for (const consumer of connectedConsumers) {
+    breakdownByPriority[consumer.priority].demand += consumer.consumption;
     breakdownByPriority[consumer.priority].consumption += consumer.consumption;
   }
+  breakdownByPriority[2].demand += connectedLightingConsumption;
   breakdownByPriority[2].consumption += connectedLightingConsumption;
+
+  for (let y = 0; y < GRID_SIZE; y++) {
+    for (let x = 0; x < GRID_SIZE; x++) {
+      const cell = grid[y][x];
+      if (!connectedCells.has(`${x},${y}`) || cell.faulty) continue;
+      if (cell.type === 'windmill' || cell.type === 'battery') {
+        const priority = getBuildingPriority(cell.type, priorityOverrides);
+        const nominal = 0.01;
+        breakdownByPriority[priority].demand += nominal;
+        breakdownByPriority[priority].consumption += nominal;
+        breakdownByPriority[priority].powered += nominal;
+      }
+    }
+  }
+
+  let actualHouseConsumption = 0;
+  let actualFactoryConsumption = 0;
+  let actualLightingConsumption = 0;
 
   for (let p = 1; p <= 3; p++) {
     const priority = p as PriorityLevel;
@@ -397,6 +418,11 @@ export function calculatePowerNetwork(
         remainingPower -= consumer.consumption;
         poweredCells.add(`${consumer.x},${consumer.y}`);
         breakdownByPriority[priority].powered += consumer.consumption;
+        if (consumer.type === 'house') {
+          actualHouseConsumption += consumer.consumption;
+        } else if (consumer.type === 'factory') {
+          actualFactoryConsumption += consumer.consumption;
+        }
       }
     }
 
@@ -404,21 +430,29 @@ export function calculatePowerNetwork(
       if (remainingPower >= connectedLightingConsumption) {
         remainingPower -= connectedLightingConsumption;
         breakdownByPriority[priority].powered += connectedLightingConsumption;
+        actualLightingConsumption += connectedLightingConsumption;
       } else {
         breakdownByPriority[priority].powered += remainingPower;
+        actualLightingConsumption += remainingPower;
         remainingPower = 0;
       }
     }
   }
 
+  const totalConsumption = actualHouseConsumption + actualFactoryConsumption + actualLightingConsumption;
+
   return {
     poweredCells,
     totalGeneration,
+    totalDemand,
     totalConsumption,
     batteryCapacity,
-    houseConsumption,
-    factoryConsumption,
-    lightingConsumption,
+    houseDemand,
+    factoryDemand,
+    lightingDemand,
+    houseConsumption: actualHouseConsumption,
+    factoryConsumption: actualFactoryConsumption,
+    lightingConsumption: actualLightingConsumption,
     breakdownByPriority,
   };
 }
@@ -484,6 +518,10 @@ export function generatePowerForecast(
     }
   }
 
+  const housePriority = getBuildingPriority('house', priorityOverrides);
+  const factoryPriority = getBuildingPriority('factory', priorityOverrides);
+  const lightingPriority = 2 as PriorityLevel;
+
   let projectedStorage = currentStoredPower;
 
   for (let i = 0; i <= FORECAST_STEPS; i++) {
@@ -491,13 +529,45 @@ export function generatePowerForecast(
     const phase = getTimePhase(forecastTime);
 
     const baseGen = windmillCount * getWindmillGeneration(forecastTime, 5, 1);
-    const houseLoad = houseCount * getHouseConsumption(forecastTime, BUILDING_STATS.house.consumption);
-    const factoryLoad =
+    const houseDemand = houseCount * getHouseConsumption(forecastTime, BUILDING_STATS.house.consumption);
+    const factoryDemand =
       factoryCount * getFactoryConsumption(forecastTime, BUILDING_STATS.factory.consumption);
-    const lightingLoad = getLightingConsumption(forecastTime, houseCount, factoryCount);
-    const totalConsumption = houseLoad + factoryLoad + lightingLoad;
+    const lightingDemand = getLightingConsumption(forecastTime, houseCount, factoryCount);
+    const totalDemand = houseDemand + factoryDemand + lightingDemand;
 
-    const netPower = baseGen - totalConsumption;
+    const batteryDischargeAvail = Math.max(0, projectedStorage);
+    const totalAvailPower = baseGen + batteryDischargeAvail;
+
+    const demandsByPriority: Array<{ priority: PriorityLevel; demand: number; type: string }> = [
+      { priority: housePriority, demand: houseDemand, type: 'house' },
+      { priority: factoryPriority, demand: factoryDemand, type: 'factory' },
+      { priority: lightingPriority, demand: lightingDemand, type: 'lighting' },
+    ];
+
+    demandsByPriority.sort((a, b) => Number(a.priority) - Number(b.priority));
+
+    let remaining = totalAvailPower;
+    let actualHouse = 0;
+    let actualFactory = 0;
+    let actualLighting = 0;
+
+    for (const d of demandsByPriority) {
+      if (remaining >= d.demand) {
+        remaining -= d.demand;
+        if (d.type === 'house') actualHouse = d.demand;
+        else if (d.type === 'factory') actualFactory = d.demand;
+        else if (d.type === 'lighting') actualLighting = d.demand;
+      } else {
+        const ratio = remaining / Math.max(d.demand, 0.001);
+        if (d.type === 'house') actualHouse = d.demand * ratio;
+        else if (d.type === 'factory') actualFactory = d.demand * ratio;
+        else if (d.type === 'lighting') actualLighting = d.demand * ratio;
+        remaining = 0;
+      }
+    }
+
+    const actualConsumption = actualHouse + actualFactory + actualLighting;
+    const netPower = baseGen - actualConsumption;
 
     if (netPower > 0) {
       projectedStorage = Math.min(batteryCapacity, projectedStorage + netPower * 0.3);
@@ -511,10 +581,10 @@ export function generatePowerForecast(
       time: forecastTime,
       phase,
       generation: Math.round(baseGen * 10) / 10,
-      consumption: Math.round(totalConsumption * 10) / 10,
-      houseLoad: Math.round(houseLoad * 10) / 10,
-      factoryLoad: Math.round(factoryLoad * 10) / 10,
-      lightingLoad: Math.round(lightingLoad * 10) / 10,
+      consumption: Math.round(actualConsumption * 10) / 10,
+      houseLoad: Math.round(actualHouse * 10) / 10,
+      factoryLoad: Math.round(actualFactory * 10) / 10,
+      lightingLoad: Math.round(actualLighting * 10) / 10,
       netPower: Math.round(netPower * 10) / 10,
       projectedStorage: Math.round(projectedStorage * 10) / 10,
     });
