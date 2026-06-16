@@ -5,6 +5,17 @@ import {
   DIR_OFFSETS,
   BUILDING_STATS,
   DAY_THRESHOLD,
+  DAY_LENGTH,
+  PHASE_RANGES,
+  TimePhase,
+  HOUSE_LOAD_PROFILE,
+  FACTORY_LOAD_PROFILE,
+  LIGHTING_LOAD_PROFILE,
+  WINDMILL_GEN_PROFILE,
+  LIGHTING_PER_BUILDING,
+  FORECAST_STEPS,
+  FORECAST_TICK_STEP,
+  PriorityLevel,
 } from './constants';
 
 export function isWireConnected(wire: GridCell, direction: number): boolean {
@@ -18,20 +29,175 @@ export function getOppositeDirection(dir: number): number {
   return (dir + 2) % 4;
 }
 
+export function getTimePhase(dayTime: number): TimePhase {
+  const t = ((dayTime % DAY_LENGTH) + DAY_LENGTH) % DAY_LENGTH;
+  for (const range of PHASE_RANGES) {
+    const start = range.start % DAY_LENGTH;
+    const end = range.end % DAY_LENGTH;
+    if (start < end) {
+      if (t >= start && t < end) return range.phase;
+    } else {
+      if (t >= start || t < end) return range.phase;
+    }
+  }
+  return 'day';
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * Math.max(0, Math.min(1, t));
+}
+
+function getPhaseBlendFactors(dayTime: number): Partial<Record<TimePhase, number>> {
+  const t = ((dayTime % DAY_LENGTH) + DAY_LENGTH) % DAY_LENGTH;
+  const blendWidth = 5;
+
+  const factors: Partial<Record<TimePhase, number>> = {};
+
+  for (const range of PHASE_RANGES) {
+    const start = range.start % DAY_LENGTH;
+    const end = range.end % DAY_LENGTH;
+    let inRange = false;
+    let blendT = 0.5;
+
+    if (start < end) {
+      if (t >= start - blendWidth && t < end + blendWidth) {
+        inRange = true;
+        if (t < start + blendWidth) {
+          blendT = (t - (start - blendWidth)) / (blendWidth * 2);
+        } else if (t >= end - blendWidth) {
+          blendT = 1 - (t - (end - blendWidth)) / (blendWidth * 2);
+        } else {
+          blendT = 1;
+        }
+      }
+    } else {
+      if (t >= start - blendWidth || t < end + blendWidth) {
+        inRange = true;
+        const wrapT = t >= start ? t : t + DAY_LENGTH;
+        const wrapStart = start;
+        const wrapEnd = end + DAY_LENGTH;
+        if (wrapT < wrapStart + blendWidth) {
+          blendT = (wrapT - (wrapStart - blendWidth)) / (blendWidth * 2);
+        } else if (wrapT >= wrapEnd - blendWidth) {
+          blendT = 1 - (wrapT - (wrapEnd - blendWidth)) / (blendWidth * 2);
+        } else {
+          blendT = 1;
+        }
+      }
+    }
+
+    if (inRange) {
+      factors[range.phase] = Math.max(0, Math.min(1, blendT));
+    }
+  }
+
+  let total = Object.values(factors).reduce((a, b) => a + (b || 0), 0);
+  if (total === 0) {
+    return { day: 1 };
+  }
+  if (Math.abs(total - 1) > 0.01) {
+    for (const k of Object.keys(factors) as TimePhase[]) {
+      factors[k] = (factors[k] || 0) / total;
+    }
+  }
+
+  return factors;
+}
+
+export function getHouseConsumption(dayTime: number, baseConsumption: number): number {
+  const factors = getPhaseBlendFactors(dayTime);
+  let multiplier = 0;
+  for (const [phase, weight] of Object.entries(factors)) {
+    multiplier += (HOUSE_LOAD_PROFILE[phase as TimePhase] || 0) * (weight || 0);
+  }
+  return baseConsumption * multiplier;
+}
+
+export function getFactoryConsumption(dayTime: number, baseConsumption: number): number {
+  const factors = getPhaseBlendFactors(dayTime);
+  let multiplier = 0;
+  for (const [phase, weight] of Object.entries(factors)) {
+    multiplier += (FACTORY_LOAD_PROFILE[phase as TimePhase] || 0) * (weight || 0);
+  }
+  return baseConsumption * multiplier;
+}
+
+export function getLightingConsumption(
+  dayTime: number,
+  houseCount: number,
+  factoryCount: number
+): number {
+  const factors = getPhaseBlendFactors(dayTime);
+  let multiplier = 0;
+  for (const [phase, weight] of Object.entries(factors)) {
+    multiplier += (LIGHTING_LOAD_PROFILE[phase as TimePhase] || 0) * (weight || 0);
+  }
+  const totalBuildings = houseCount + factoryCount;
+  return LIGHTING_PER_BUILDING * totalBuildings * multiplier;
+}
+
+export function getWindmillGeneration(
+  dayTime: number,
+  baseDayGen: number,
+  baseNightGen: number
+): number {
+  const factors = getPhaseBlendFactors(dayTime);
+  let multiplier = 0;
+  for (const [phase, weight] of Object.entries(factors)) {
+    const profile = WINDMILL_GEN_PROFILE[phase as TimePhase];
+    if (profile) {
+      const phaseMult = lerp(profile.min, profile.max, 0.5);
+      multiplier += phaseMult * (weight || 0);
+    }
+  }
+  const isDay = dayTime < DAY_THRESHOLD;
+  const base = isDay ? baseDayGen : baseNightGen;
+  if (multiplier === 0) return base;
+  if (isDay) {
+    return baseDayGen * multiplier;
+  } else {
+    return baseDayGen * multiplier + baseNightGen * (1 - multiplier / 0.2) * 0;
+  }
+}
+
+export function getBuildingPriority(
+  type: GridCell['type'],
+  overrides: Partial<Record<GridCell['type'], PriorityLevel>>
+): PriorityLevel {
+  if (overrides[type]) return overrides[type]!;
+  const stats = BUILDING_STATS[type];
+  if (!stats) return 1;
+  return (stats as typeof BUILDING_STATS.house).defaultPriority;
+}
+
+interface ConnectedCell {
+  x: number;
+  y: number;
+  type: GridCell['type'];
+  consumption: number;
+  priority: PriorityLevel;
+}
+
 export function calculatePowerNetwork(
   grid: GridCell[][],
   dayTime: number,
-  storedPower: number
+  storedPower: number,
+  priorityOverrides: Partial<Record<GridCell['type'], PriorityLevel>> = {}
 ): {
   poweredCells: Set<string>;
   totalGeneration: number;
   totalConsumption: number;
   batteryCapacity: number;
+  houseConsumption: number;
+  factoryConsumption: number;
+  lightingConsumption: number;
+  breakdownByPriority: Record<PriorityLevel, { consumption: number; powered: number }>;
 } {
-  const isDay = dayTime < DAY_THRESHOLD;
   let totalGeneration = 0;
   let totalConsumption = 0;
   let batteryCapacity = 0;
+  let houseCount = 0;
+  let factoryCount = 0;
 
   const windmillSources: Array<{ x: number; y: number; gen: number }> = [];
   const batterySources: Array<{ x: number; y: number; discharge: number }> = [];
@@ -42,9 +208,11 @@ export function calculatePowerNetwork(
       if (cell.faulty) continue;
 
       if (cell.type === 'windmill') {
-        const gen = isDay
-          ? BUILDING_STATS.windmill.dayGen
-          : BUILDING_STATS.windmill.nightGen;
+        const gen = getWindmillGeneration(
+          dayTime,
+          BUILDING_STATS.windmill.dayGen,
+          BUILDING_STATS.windmill.nightGen
+        );
         totalGeneration += gen;
         windmillSources.push({ x, y, gen });
       }
@@ -52,21 +220,25 @@ export function calculatePowerNetwork(
         batteryCapacity += BUILDING_STATS.battery.storage;
       }
       if (cell.type === 'house') {
-        totalConsumption += BUILDING_STATS.house.consumption;
+        houseCount++;
       }
       if (cell.type === 'factory') {
-        totalConsumption += BUILDING_STATS.factory.consumption;
+        factoryCount++;
       }
     }
   }
+
+  const houseConsumption = houseCount * getHouseConsumption(dayTime, BUILDING_STATS.house.consumption);
+  const factoryConsumption =
+    factoryCount * getFactoryConsumption(dayTime, BUILDING_STATS.factory.consumption);
+  const lightingConsumption = getLightingConsumption(dayTime, houseCount, factoryCount);
+  totalConsumption = houseConsumption + factoryConsumption + lightingConsumption;
 
   const availableFromBatteries = Math.max(0, storedPower);
   const totalAvailable = totalGeneration + availableFromBatteries;
 
   if (availableFromBatteries > 0) {
-    const batteryCount = grid.flat().filter(
-      (c) => c.type === 'battery' && !c.faulty
-    ).length;
+    const batteryCount = grid.flat().filter((c) => c.type === 'battery' && !c.faulty).length;
     if (batteryCount > 0) {
       const dischargePerBattery = availableFromBatteries / batteryCount;
       for (let y = 0; y < GRID_SIZE; y++) {
@@ -160,41 +332,95 @@ export function calculatePowerNetwork(
     }
   }
 
-  const connectedConsumers: Array<{
-    x: number;
-    y: number;
-    consumption: number;
-  }> = [];
+  const connectedConsumers: ConnectedCell[] = [];
+  let connectedHouseCount = 0;
+  let connectedFactoryCount = 0;
+
   for (let y = 0; y < GRID_SIZE; y++) {
     for (let x = 0; x < GRID_SIZE; x++) {
       const cell = grid[y][x];
-      if (
-        (cell.type === 'house' || cell.type === 'factory') &&
-        connectedCells.has(`${x},${y}`)
-      ) {
+      if (!connectedCells.has(`${x},${y}`)) continue;
+
+      if (cell.type === 'house') {
+        connectedHouseCount++;
+        const cons = getHouseConsumption(dayTime, BUILDING_STATS.house.consumption);
         connectedConsumers.push({
           x,
           y,
-          consumption:
-            cell.type === 'house'
-              ? BUILDING_STATS.house.consumption
-              : BUILDING_STATS.factory.consumption,
+          type: 'house',
+          consumption: cons,
+          priority: getBuildingPriority('house', priorityOverrides),
+        });
+      }
+      if (cell.type === 'factory') {
+        connectedFactoryCount++;
+        const cons = getFactoryConsumption(dayTime, BUILDING_STATS.factory.consumption);
+        connectedConsumers.push({
+          x,
+          y,
+          type: 'factory',
+          consumption: cons,
+          priority: getBuildingPriority('factory', priorityOverrides),
         });
       }
     }
   }
 
+  const connectedLightingConsumption = getLightingConsumption(
+    dayTime,
+    connectedHouseCount,
+    connectedFactoryCount
+  );
+
   let remainingPower = totalAvailable;
-  connectedConsumers.sort((a, b) => a.consumption - b.consumption);
+
+  const breakdownByPriority: Record<
+    PriorityLevel,
+    { consumption: number; powered: number }
+  > = {
+    1: { consumption: 0, powered: 0 },
+    2: { consumption: 0, powered: 0 },
+    3: { consumption: 0, powered: 0 },
+  };
 
   for (const consumer of connectedConsumers) {
-    if (remainingPower >= consumer.consumption) {
-      remainingPower -= consumer.consumption;
-      poweredCells.add(`${consumer.x},${consumer.y}`);
+    breakdownByPriority[consumer.priority].consumption += consumer.consumption;
+  }
+  breakdownByPriority[2].consumption += connectedLightingConsumption;
+
+  for (let p = 1; p <= 3; p++) {
+    const priority = p as PriorityLevel;
+    const consumersThisPriority = connectedConsumers.filter((c) => c.priority === priority);
+
+    for (const consumer of consumersThisPriority) {
+      if (remainingPower >= consumer.consumption) {
+        remainingPower -= consumer.consumption;
+        poweredCells.add(`${consumer.x},${consumer.y}`);
+        breakdownByPriority[priority].powered += consumer.consumption;
+      }
+    }
+
+    if (priority === 2) {
+      if (remainingPower >= connectedLightingConsumption) {
+        remainingPower -= connectedLightingConsumption;
+        breakdownByPriority[priority].powered += connectedLightingConsumption;
+      } else {
+        breakdownByPriority[priority].powered += remainingPower;
+        remainingPower = 0;
+      }
     }
   }
 
-  return { poweredCells, totalGeneration, totalConsumption, batteryCapacity };
+  return {
+    poweredCells,
+    totalGeneration,
+    totalConsumption,
+    batteryCapacity,
+    houseConsumption,
+    factoryConsumption,
+    lightingConsumption,
+    breakdownByPriority,
+  };
 }
 
 export function countPoweredBuildings(
@@ -221,4 +447,78 @@ export function countPoweredBuildings(
   }
 
   return { houses, poweredHouses, factories, poweredFactories };
+}
+
+export interface ForecastPoint {
+  time: number;
+  phase: TimePhase;
+  generation: number;
+  consumption: number;
+  houseLoad: number;
+  factoryLoad: number;
+  lightingLoad: number;
+  netPower: number;
+  projectedStorage: number;
+}
+
+export function generatePowerForecast(
+  grid: GridCell[][],
+  currentDayTime: number,
+  currentStoredPower: number,
+  batteryCapacity: number,
+  priorityOverrides: Partial<Record<GridCell['type'], PriorityLevel>> = {}
+): ForecastPoint[] {
+  const forecast: ForecastPoint[] = [];
+
+  let windmillCount = 0;
+  let houseCount = 0;
+  let factoryCount = 0;
+
+  for (let y = 0; y < GRID_SIZE; y++) {
+    for (let x = 0; x < GRID_SIZE; x++) {
+      const cell = grid[y][x];
+      if (cell.faulty) continue;
+      if (cell.type === 'windmill') windmillCount++;
+      if (cell.type === 'house') houseCount++;
+      if (cell.type === 'factory') factoryCount++;
+    }
+  }
+
+  let projectedStorage = currentStoredPower;
+
+  for (let i = 0; i <= FORECAST_STEPS; i++) {
+    const forecastTime = ((currentDayTime + i * FORECAST_TICK_STEP) % DAY_LENGTH + DAY_LENGTH) % DAY_LENGTH;
+    const phase = getTimePhase(forecastTime);
+
+    const baseGen = windmillCount * getWindmillGeneration(forecastTime, 5, 1);
+    const houseLoad = houseCount * getHouseConsumption(forecastTime, BUILDING_STATS.house.consumption);
+    const factoryLoad =
+      factoryCount * getFactoryConsumption(forecastTime, BUILDING_STATS.factory.consumption);
+    const lightingLoad = getLightingConsumption(forecastTime, houseCount, factoryCount);
+    const totalConsumption = houseLoad + factoryLoad + lightingLoad;
+
+    const netPower = baseGen - totalConsumption;
+
+    if (netPower > 0) {
+      projectedStorage = Math.min(batteryCapacity, projectedStorage + netPower * 0.3);
+    } else if (netPower < 0) {
+      const deficit = -netPower;
+      const discharge = Math.min(projectedStorage, deficit * 0.5);
+      projectedStorage = Math.max(0, projectedStorage - discharge);
+    }
+
+    forecast.push({
+      time: forecastTime,
+      phase,
+      generation: Math.round(baseGen * 10) / 10,
+      consumption: Math.round(totalConsumption * 10) / 10,
+      houseLoad: Math.round(houseLoad * 10) / 10,
+      factoryLoad: Math.round(factoryLoad * 10) / 10,
+      lightingLoad: Math.round(lightingLoad * 10) / 10,
+      netPower: Math.round(netPower * 10) / 10,
+      projectedStorage: Math.round(projectedStorage * 10) / 10,
+    });
+  }
+
+  return forecast;
 }

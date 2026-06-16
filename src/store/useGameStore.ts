@@ -7,8 +7,14 @@ import {
   FAULT_CHANCE,
   BUILDING_STATS,
   DAY_THRESHOLD,
+  PriorityLevel,
 } from '../utils/constants';
-import { calculatePowerNetwork, countPoweredBuildings } from '../utils/powerCalculator';
+import {
+  calculatePowerNetwork,
+  countPoweredBuildings,
+  generatePowerForecast,
+  ForecastPoint,
+} from '../utils/powerCalculator';
 
 const STORAGE_KEY = 'floating-island-grid-game-save';
 
@@ -17,7 +23,10 @@ interface PersistedState {
   dayTime: number;
   storedPower: number;
   satisfaction: number;
+  priorityOverrides: Partial<Record<GridCell['type'], PriorityLevel>>;
 }
+
+type PriorityBreakdown = Record<PriorityLevel, { consumption: number; powered: number }>;
 
 interface GameState {
   grid: GridCell[][];
@@ -29,6 +38,12 @@ interface GameState {
   poweredCells: Set<string>;
   totalGeneration: number;
   totalConsumption: number;
+  houseConsumption: number;
+  factoryConsumption: number;
+  lightingConsumption: number;
+  breakdownByPriority: PriorityBreakdown;
+  forecast: ForecastPoint[];
+  priorityOverrides: Partial<Record<GridCell['type'], PriorityLevel>>;
   showSettlement: boolean;
   setSelectedTool: (tool: ToolType) => void;
   placeOrRemove: (x: number, y: number) => void;
@@ -38,6 +53,8 @@ interface GameState {
   resetGame: () => void;
   openSettlement: () => void;
   closeSettlement: () => void;
+  setBuildingPriority: (type: GridCell['type'], priority: PriorityLevel) => void;
+  resetPriorities: () => void;
 }
 
 function createEmptyGrid(): GridCell[][] {
@@ -59,6 +76,8 @@ function createEmptyGrid(): GridCell[][] {
   return grid;
 }
 
+const DEFAULT_PRIORITY_OVERRIDES: Partial<Record<GridCell['type'], PriorityLevel>> = {};
+
 function saveToLocalStorage(state: PersistedState): void {
   try {
     const data = JSON.stringify({
@@ -66,6 +85,7 @@ function saveToLocalStorage(state: PersistedState): void {
       dayTime: state.dayTime,
       storedPower: state.storedPower,
       satisfaction: state.satisfaction,
+      priorityOverrides: state.priorityOverrides,
     });
     localStorage.setItem(STORAGE_KEY, data);
   } catch {
@@ -84,6 +104,7 @@ function loadFromLocalStorage(): PersistedState | null {
         dayTime: data.dayTime ?? 20,
         storedPower: data.storedPower ?? 10,
         satisfaction: data.satisfaction ?? 50,
+        priorityOverrides: data.priorityOverrides ?? DEFAULT_PRIORITY_OVERRIDES,
       };
     }
   } catch {
@@ -92,9 +113,22 @@ function loadFromLocalStorage(): PersistedState | null {
   return null;
 }
 
-function recalcGrid(grid: GridCell[][], dayTime: number, storedPower: number) {
-  const { poweredCells, totalGeneration, totalConsumption, batteryCapacity } =
-    calculatePowerNetwork(grid, dayTime, storedPower);
+function recalcGrid(
+  grid: GridCell[][],
+  dayTime: number,
+  storedPower: number,
+  priorityOverrides: Partial<Record<GridCell['type'], PriorityLevel>>
+) {
+  const {
+    poweredCells,
+    totalGeneration,
+    totalConsumption,
+    batteryCapacity,
+    houseConsumption,
+    factoryConsumption,
+    lightingConsumption,
+    breakdownByPriority,
+  } = calculatePowerNetwork(grid, dayTime, storedPower, priorityOverrides);
 
   const newGrid = grid.map((row) => row.map((c) => ({ ...c })));
   for (let yy = 0; yy < GRID_SIZE; yy++) {
@@ -103,18 +137,50 @@ function recalcGrid(grid: GridCell[][], dayTime: number, storedPower: number) {
     }
   }
 
-  return { newGrid, poweredCells, totalGeneration, totalConsumption, batteryCapacity };
+  const forecast = generatePowerForecast(
+    newGrid,
+    dayTime,
+    storedPower,
+    batteryCapacity,
+    priorityOverrides
+  );
+
+  return {
+    newGrid,
+    poweredCells,
+    totalGeneration,
+    totalConsumption,
+    batteryCapacity,
+    houseConsumption,
+    factoryConsumption,
+    lightingConsumption,
+    breakdownByPriority,
+    forecast,
+  };
 }
 
-function initGame(): Omit<GameState, keyof GameStateActions> {
+type InitResult = Omit<GameState, keyof GameStateActions>;
+
+function initGame(): InitResult {
   const saved = loadFromLocalStorage();
   const grid = saved ? saved.grid : createEmptyGrid();
   const dayTime = saved ? saved.dayTime : 20;
   const storedPower = saved ? saved.storedPower : 10;
   const satisfaction = saved ? saved.satisfaction : 50;
+  const priorityOverrides = saved ? saved.priorityOverrides : DEFAULT_PRIORITY_OVERRIDES;
 
-  const { newGrid, poweredCells, totalGeneration, totalConsumption, batteryCapacity } =
-    recalcGrid(grid, dayTime, storedPower);
+  const {
+    newGrid,
+    poweredCells,
+    totalGeneration,
+    totalConsumption,
+    batteryCapacity,
+    houseConsumption,
+    factoryConsumption,
+    lightingConsumption,
+    breakdownByPriority,
+    forecast,
+  } = recalcGrid(grid, dayTime, storedPower, priorityOverrides);
 
   return {
     grid: newGrid,
@@ -126,6 +192,12 @@ function initGame(): Omit<GameState, keyof GameStateActions> {
     poweredCells,
     totalGeneration,
     totalConsumption,
+    houseConsumption,
+    factoryConsumption,
+    lightingConsumption,
+    breakdownByPriority,
+    forecast,
+    priorityOverrides,
     showSettlement: false,
   };
 }
@@ -140,6 +212,8 @@ type GameStateActions = Pick<
   | 'resetGame'
   | 'openSettlement'
   | 'closeSettlement'
+  | 'setBuildingPriority'
+  | 'resetPriorities'
 >;
 
 export const useGameStore = create<GameState>((set, get) => ({
@@ -173,13 +247,18 @@ export const useGameStore = create<GameState>((set, get) => ({
       };
     }
 
-    const result = recalcGrid(newGrid, state.dayTime, state.storedPower);
+    const result = recalcGrid(newGrid, state.dayTime, state.storedPower, state.priorityOverrides);
 
     const nextState = {
       grid: result.newGrid,
       poweredCells: result.poweredCells,
       totalGeneration: result.totalGeneration,
       totalConsumption: result.totalConsumption,
+      houseConsumption: result.houseConsumption,
+      factoryConsumption: result.factoryConsumption,
+      lightingConsumption: result.lightingConsumption,
+      breakdownByPriority: result.breakdownByPriority,
+      forecast: result.forecast,
       maxStorage: result.batteryCapacity,
     };
 
@@ -188,6 +267,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       dayTime: state.dayTime,
       storedPower: state.storedPower,
       satisfaction: state.satisfaction,
+      priorityOverrides: state.priorityOverrides,
     });
 
     set(nextState);
@@ -201,13 +281,18 @@ export const useGameStore = create<GameState>((set, get) => ({
     const newGrid = state.grid.map((row) => row.map((c) => ({ ...c })));
     newGrid[y][x].rotation = (cell.rotation + 1) % 6;
 
-    const result = recalcGrid(newGrid, state.dayTime, state.storedPower);
+    const result = recalcGrid(newGrid, state.dayTime, state.storedPower, state.priorityOverrides);
 
     const nextState = {
       grid: result.newGrid,
       poweredCells: result.poweredCells,
       totalGeneration: result.totalGeneration,
       totalConsumption: result.totalConsumption,
+      houseConsumption: result.houseConsumption,
+      factoryConsumption: result.factoryConsumption,
+      lightingConsumption: result.lightingConsumption,
+      breakdownByPriority: result.breakdownByPriority,
+      forecast: result.forecast,
       maxStorage: result.batteryCapacity,
     };
 
@@ -216,6 +301,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       dayTime: state.dayTime,
       storedPower: state.storedPower,
       satisfaction: state.satisfaction,
+      priorityOverrides: state.priorityOverrides,
     });
 
     set(nextState);
@@ -229,13 +315,18 @@ export const useGameStore = create<GameState>((set, get) => ({
     const newGrid = state.grid.map((row) => row.map((c) => ({ ...c })));
     newGrid[y][x].faulty = false;
 
-    const result = recalcGrid(newGrid, state.dayTime, state.storedPower);
+    const result = recalcGrid(newGrid, state.dayTime, state.storedPower, state.priorityOverrides);
 
     const nextState = {
       grid: result.newGrid,
       poweredCells: result.poweredCells,
       totalGeneration: result.totalGeneration,
       totalConsumption: result.totalConsumption,
+      houseConsumption: result.houseConsumption,
+      factoryConsumption: result.factoryConsumption,
+      lightingConsumption: result.lightingConsumption,
+      breakdownByPriority: result.breakdownByPriority,
+      forecast: result.forecast,
       maxStorage: result.batteryCapacity,
     };
 
@@ -244,6 +335,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       dayTime: state.dayTime,
       storedPower: state.storedPower,
       satisfaction: state.satisfaction,
+      priorityOverrides: state.priorityOverrides,
     });
 
     set(nextState);
@@ -264,8 +356,16 @@ export const useGameStore = create<GameState>((set, get) => ({
 
     const newDayTime = (state.dayTime + 0.5) % DAY_LENGTH;
 
-    const { poweredCells, totalGeneration, totalConsumption, batteryCapacity } =
-      calculatePowerNetwork(newGrid, newDayTime, state.storedPower);
+    const {
+      poweredCells,
+      totalGeneration,
+      totalConsumption,
+      batteryCapacity,
+      houseConsumption,
+      factoryConsumption,
+      lightingConsumption,
+      breakdownByPriority,
+    } = calculatePowerNetwork(newGrid, newDayTime, state.storedPower, state.priorityOverrides);
 
     for (let yy = 0; yy < GRID_SIZE; yy++) {
       for (let xx = 0; xx < GRID_SIZE; xx++) {
@@ -275,17 +375,24 @@ export const useGameStore = create<GameState>((set, get) => ({
 
     const netPower = totalGeneration - totalConsumption;
     let newStoredPower = state.storedPower;
-    const isDay = newDayTime < DAY_THRESHOLD;
 
     if (batteryCapacity > 0) {
       if (netPower > 0) {
         newStoredPower = Math.min(batteryCapacity, state.storedPower + netPower * 0.3);
-      } else if (netPower < 0 && !isDay) {
+      } else if (netPower < 0) {
         const deficit = -netPower;
         const discharge = Math.min(state.storedPower, deficit * 0.5);
         newStoredPower = Math.max(0, state.storedPower - discharge);
       }
     }
+
+    const forecast = generatePowerForecast(
+      newGrid,
+      newDayTime,
+      newStoredPower,
+      batteryCapacity,
+      state.priorityOverrides
+    );
 
     const { houses, poweredHouses, factories, poweredFactories } = countPoweredBuildings(
       newGrid,
@@ -309,6 +416,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       dayTime: newDayTime,
       storedPower: newStoredPower,
       satisfaction: newSatisfaction,
+      priorityOverrides: state.priorityOverrides,
     });
 
     set({
@@ -320,13 +428,18 @@ export const useGameStore = create<GameState>((set, get) => ({
       poweredCells,
       totalGeneration,
       totalConsumption,
+      houseConsumption,
+      factoryConsumption,
+      lightingConsumption,
+      breakdownByPriority,
+      forecast,
     });
   },
 
   resetGame: () => {
     localStorage.removeItem(STORAGE_KEY);
     const fresh = createEmptyGrid();
-    const result = recalcGrid(fresh, 20, 10);
+    const result = recalcGrid(fresh, 20, 10, DEFAULT_PRIORITY_OVERRIDES);
     set({
       grid: result.newGrid,
       dayTime: 20,
@@ -337,10 +450,71 @@ export const useGameStore = create<GameState>((set, get) => ({
       poweredCells: result.poweredCells,
       totalGeneration: result.totalGeneration,
       totalConsumption: result.totalConsumption,
+      houseConsumption: result.houseConsumption,
+      factoryConsumption: result.factoryConsumption,
+      lightingConsumption: result.lightingConsumption,
+      breakdownByPriority: result.breakdownByPriority,
+      forecast: result.forecast,
+      priorityOverrides: DEFAULT_PRIORITY_OVERRIDES,
       showSettlement: false,
     });
   },
 
   openSettlement: () => set({ showSettlement: true }),
   closeSettlement: () => set({ showSettlement: false }),
+
+  setBuildingPriority: (type, priority) => {
+    const state = get();
+    const newOverrides = { ...state.priorityOverrides, [type]: priority };
+    const result = recalcGrid(state.grid, state.dayTime, state.storedPower, newOverrides);
+
+    saveToLocalStorage({
+      grid: result.newGrid,
+      dayTime: state.dayTime,
+      storedPower: state.storedPower,
+      satisfaction: state.satisfaction,
+      priorityOverrides: newOverrides,
+    });
+
+    set({
+      grid: result.newGrid,
+      poweredCells: result.poweredCells,
+      totalGeneration: result.totalGeneration,
+      totalConsumption: result.totalConsumption,
+      houseConsumption: result.houseConsumption,
+      factoryConsumption: result.factoryConsumption,
+      lightingConsumption: result.lightingConsumption,
+      breakdownByPriority: result.breakdownByPriority,
+      forecast: result.forecast,
+      maxStorage: result.batteryCapacity,
+      priorityOverrides: newOverrides,
+    });
+  },
+
+  resetPriorities: () => {
+    const state = get();
+    const result = recalcGrid(state.grid, state.dayTime, state.storedPower, DEFAULT_PRIORITY_OVERRIDES);
+
+    saveToLocalStorage({
+      grid: result.newGrid,
+      dayTime: state.dayTime,
+      storedPower: state.storedPower,
+      satisfaction: state.satisfaction,
+      priorityOverrides: DEFAULT_PRIORITY_OVERRIDES,
+    });
+
+    set({
+      grid: result.newGrid,
+      poweredCells: result.poweredCells,
+      totalGeneration: result.totalGeneration,
+      totalConsumption: result.totalConsumption,
+      houseConsumption: result.houseConsumption,
+      factoryConsumption: result.factoryConsumption,
+      lightingConsumption: result.lightingConsumption,
+      breakdownByPriority: result.breakdownByPriority,
+      forecast: result.forecast,
+      maxStorage: result.batteryCapacity,
+      priorityOverrides: DEFAULT_PRIORITY_OVERRIDES,
+    });
+  },
 }));

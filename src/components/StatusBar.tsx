@@ -1,21 +1,29 @@
 import React from 'react';
 import { useGameStore } from '../store/useGameStore';
-import { Sun, Moon, Zap, Battery, Smile, Meh, Frown } from 'lucide-react';
+import { Zap, Battery, Smile, Meh, Frown, Home, Factory, Lightbulb } from 'lucide-react';
+import { TIME_PHASES, DAY_LENGTH } from '../utils/constants';
+import { getTimePhase } from '../utils/powerCalculator';
 
 export const StatusBar: React.FC = () => {
   const {
     dayTime,
     totalGeneration,
     totalConsumption,
+    houseConsumption,
+    factoryConsumption,
+    lightingConsumption,
     storedPower,
     maxStorage,
     satisfaction,
     openSettlement,
   } = useGameStore();
 
-  const isDay = dayTime < 50;
-  const netPower = totalGeneration - totalConsumption;
+  const phase = getTimePhase(dayTime);
+  const phaseInfo = TIME_PHASES[phase];
+  const isNight = phase === 'night' || phase === 'dusk';
+  const netPower = Math.round((totalGeneration - totalConsumption) * 10) / 10;
   const storagePercent = maxStorage > 0 ? (storedPower / maxStorage) * 100 : 0;
+  const progress = ((dayTime % DAY_LENGTH) + DAY_LENGTH) % DAY_LENGTH;
 
   const getSatisfactionIcon = () => {
     if (satisfaction >= 70) return <Smile className="w-5 h-5 text-green-500" />;
@@ -31,53 +39,57 @@ export const StatusBar: React.FC = () => {
     return '非常不满';
   };
 
+  const bgClass = isNight
+    ? 'bg-slate-800/90 border-slate-700 text-slate-200'
+    : 'bg-white/90 border-white/50 text-gray-700';
+
   return (
-    <div className="bg-white/90 backdrop-blur-md rounded-2xl p-4 shadow-xl border border-white/50">
+    <div
+      className={`${bgClass} backdrop-blur-md rounded-2xl p-4 shadow-xl border`}
+    >
       <div className="flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-2">
           <div
-            className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors duration-500 ${
-              isDay ? 'bg-yellow-100' : 'bg-indigo-900'
-            }`}
+            className="w-10 h-10 rounded-full flex items-center justify-center transition-all duration-500 text-xl"
+            style={{ background: `${phaseInfo.color}22` }}
           >
-            {isDay ? (
-              <Sun className="w-6 h-6 text-yellow-500 animate-pulse" />
-            ) : (
-              <Moon className="w-6 h-6 text-indigo-300" />
-            )}
+            {phaseInfo.emoji}
           </div>
           <div>
-            <p className="text-xs text-gray-500">{isDay ? '白天' : '夜晚'}</p>
-            <div className="w-20 h-2 bg-gray-200 rounded-full overflow-hidden">
+            <p
+              className="text-xs font-semibold"
+              style={{ color: phaseInfo.color }}
+            >
+              {phaseInfo.name}
+            </p>
+            <div className="w-28 h-2 rounded-full overflow-hidden" style={{ background: isNight ? '#334155' : '#E5E7EB' }}>
               <div
                 className="h-full transition-all duration-300 rounded-full"
                 style={{
-                  width: `${dayTime}%`,
-                  background: isDay
-                    ? 'linear-gradient(90deg, #FBBF24, #F59E0B)'
-                    : 'linear-gradient(90deg, #6366F1, #4338CA)',
+                  width: `${progress}%`,
+                  background: `linear-gradient(90deg, ${TIME_PHASES.dawn.color}, ${TIME_PHASES.day.color} 25%, ${TIME_PHASES.dusk.color} 65%, ${TIME_PHASES.night.color})`,
                 }}
               />
             </div>
           </div>
         </div>
 
-        <div className="h-10 w-px bg-gray-200" />
+        <div className={`h-10 w-px ${isNight ? 'bg-slate-700' : 'bg-gray-200'}`} />
 
         <div className="flex items-center gap-2">
-          <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center">
+          <div className={`w-10 h-10 rounded-full flex items-center justify-center ${isNight ? 'bg-blue-900/50' : 'bg-blue-50'}`}>
             <Zap className="w-5 h-5 text-blue-500" />
           </div>
           <div>
-            <p className="text-xs text-gray-500">电力</p>
-            <p className="text-sm font-bold">
-              <span className="text-green-600">+{totalGeneration}</span>
-              <span className="text-gray-400 mx-1">/</span>
-              <span className="text-red-500">-{totalConsumption}</span>
+            <p className={`text-xs ${isNight ? 'text-slate-400' : 'text-gray-500'}`}>电力</p>
+            <p className="text-sm font-bold tabular-nums">
+              <span className="text-green-500">+{Math.round(totalGeneration * 10) / 10}</span>
+              <span className={`mx-1 ${isNight ? 'text-slate-500' : 'text-gray-400'}`}>/</span>
+              <span className="text-red-400">-{Math.round(totalConsumption * 10) / 10}</span>
             </p>
             <p
-              className={`text-xs font-semibold ${
-                netPower >= 0 ? 'text-green-600' : 'text-red-500'
+              className={`text-xs font-semibold tabular-nums ${
+                netPower >= 0 ? 'text-green-500' : 'text-red-400'
               }`}
             >
               {netPower >= 0 ? '▲' : '▼'} {Math.abs(netPower)}
@@ -85,18 +97,48 @@ export const StatusBar: React.FC = () => {
           </div>
         </div>
 
-        <div className="h-10 w-px bg-gray-200" />
+        <div className={`h-10 w-px ${isNight ? 'bg-slate-700' : 'bg-gray-200'}`} />
+
+        <div className="flex items-center gap-1.5">
+          <div className="flex flex-col gap-0.5 text-[10px]">
+            <div className="flex items-center gap-1">
+              <Home className="w-3 h-3 text-violet-400" />
+              <span className="tabular-nums opacity-80">
+                {Math.round(houseConsumption * 10) / 10}
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Factory className="w-3 h-3 text-red-400" />
+              <span className="tabular-nums opacity-80">
+                {Math.round(factoryConsumption * 10) / 10}
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Lightbulb className="w-3 h-3 text-orange-400" />
+              <span className="tabular-nums opacity-80">
+                {Math.round(lightingConsumption * 10) / 10}
+              </span>
+            </div>
+          </div>
+          <div className="flex flex-col gap-0.5 text-[9px] opacity-60 pl-0.5">
+            <span>住房</span>
+            <span>工坊</span>
+            <span>照明</span>
+          </div>
+        </div>
+
+        <div className={`h-10 w-px ${isNight ? 'bg-slate-700' : 'bg-gray-200'}`} />
 
         <div className="flex items-center gap-2">
-          <div className="w-10 h-10 rounded-full bg-amber-50 flex items-center justify-center">
+          <div className={`w-10 h-10 rounded-full flex items-center justify-center ${isNight ? 'bg-amber-900/40' : 'bg-amber-50'}`}>
             <Battery className="w-5 h-5 text-amber-500" />
           </div>
           <div>
-            <p className="text-xs text-gray-500">蓄电池</p>
-            <p className="text-sm font-bold text-gray-700">
+            <p className={`text-xs ${isNight ? 'text-slate-400' : 'text-gray-500'}`}>蓄电池</p>
+            <p className="text-sm font-bold tabular-nums">
               {Math.round(storedPower)} / {maxStorage}
             </p>
-            <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
+            <div className="w-24 h-2 rounded-full overflow-hidden" style={{ background: isNight ? '#334155' : '#E5E7EB' }}>
               <div
                 className="h-full rounded-full transition-all duration-500"
                 style={{
@@ -113,16 +155,16 @@ export const StatusBar: React.FC = () => {
           </div>
         </div>
 
-        <div className="h-10 w-px bg-gray-200" />
+        <div className={`h-10 w-px ${isNight ? 'bg-slate-700' : 'bg-gray-200'}`} />
 
         <div className="flex items-center gap-2">
-          <div className="w-10 h-10 rounded-full bg-pink-50 flex items-center justify-center">
+          <div className={`w-10 h-10 rounded-full flex items-center justify-center ${isNight ? 'bg-pink-900/40' : 'bg-pink-50'}`}>
             {getSatisfactionIcon()}
           </div>
           <div>
-            <p className="text-xs text-gray-500">居民满意度</p>
-            <p className="text-sm font-bold text-gray-700">{getSatisfactionText()}</p>
-            <div className="w-20 h-2 bg-gray-200 rounded-full overflow-hidden">
+            <p className={`text-xs ${isNight ? 'text-slate-400' : 'text-gray-500'}`}>居民满意度</p>
+            <p className="text-sm font-bold">{getSatisfactionText()}</p>
+            <div className="w-20 h-2 rounded-full overflow-hidden" style={{ background: isNight ? '#334155' : '#E5E7EB' }}>
               <div
                 className="h-full rounded-full transition-all duration-500"
                 style={{
@@ -139,7 +181,7 @@ export const StatusBar: React.FC = () => {
           </div>
         </div>
 
-        <div className="h-10 w-px bg-gray-200" />
+        <div className={`h-10 w-px ${isNight ? 'bg-slate-700' : 'bg-gray-200'}`} />
 
         <button
           onClick={openSettlement}
