@@ -119,6 +119,18 @@ export const PRIORITY_INFO: Record<PriorityLevel, { name: string; color: string;
   3: { name: '低优先级', color: '#F87171', description: '生产负荷：工坊生产，可被限电' },
 };
 
+export const WINDMILL_PRIORITY_EFFICIENCY: Record<PriorityLevel, number> = {
+  1: 1.0,
+  2: 0.85,
+  3: 0.65,
+};
+
+export const BATTERY_PRIORITY_DEPTH: Record<PriorityLevel, number> = {
+  1: 1.0,
+  2: 0.75,
+  3: 0.45,
+};
+
 export const LIGHTING_PER_BUILDING = 0.8;
 
 export const WIRE_CONNECTIONS: Record<number, [boolean, boolean, boolean, boolean]> = {

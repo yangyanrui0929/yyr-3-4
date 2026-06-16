@@ -16,6 +16,8 @@ import {
   FORECAST_STEPS,
   FORECAST_TICK_STEP,
   PriorityLevel,
+  WINDMILL_PRIORITY_EFFICIENCY,
+  BATTERY_PRIORITY_DEPTH,
 } from './constants';
 
 export function isWireConnected(wire: GridCell, direction: number): boolean {
@@ -211,11 +213,13 @@ export function calculatePowerNetwork(
       if (cell.faulty) continue;
 
       if (cell.type === 'windmill') {
-        const gen = getWindmillGeneration(
+        const baseGen = getWindmillGeneration(
           dayTime,
           BUILDING_STATS.windmill.dayGen,
           BUILDING_STATS.windmill.nightGen
         );
+        const efficiency = WINDMILL_PRIORITY_EFFICIENCY[getBuildingPriority('windmill', priorityOverrides)];
+        const gen = baseGen * efficiency;
         totalGeneration += gen;
         windmillSources.push({ x, y, gen });
       }
@@ -237,7 +241,9 @@ export function calculatePowerNetwork(
   const lightingDemand = getLightingConsumption(dayTime, houseCount, factoryCount);
   const totalDemand = houseDemand + factoryDemand + lightingDemand;
 
-  const availableFromBatteries = Math.max(0, storedPower);
+  const batteryDepth = BATTERY_PRIORITY_DEPTH[getBuildingPriority('battery', priorityOverrides)];
+  const minReserve = batteryCapacity * (1 - batteryDepth);
+  const availableFromBatteries = Math.max(0, storedPower - minReserve);
   const totalAvailable = totalGeneration + availableFromBatteries;
 
   if (availableFromBatteries > 0) {
@@ -295,7 +301,7 @@ export function calculatePowerNetwork(
         currentCell.type === 'factory' ||
         currentCell.type === 'battery'
       ) {
-        canConnectFromCurrent = true;
+        canConnectFromCurrent = neighbor.type === 'wire';
       }
 
       let canConnectFromNeighbor = false;
@@ -307,13 +313,15 @@ export function calculatePowerNetwork(
         neighbor.type === 'factory' ||
         neighbor.type === 'battery'
       ) {
-        canConnectFromNeighbor = true;
+        canConnectFromNeighbor = currentCell.type === 'wire';
       }
 
       if (canConnectFromCurrent && canConnectFromNeighbor) {
         visited.add(key);
         connectedCells.add(key);
-        queue.push({ x: nx, y: ny });
+        if (neighbor.type === 'wire') {
+          queue.push({ x: nx, y: ny });
+        }
       }
     }
   }
@@ -521,6 +529,8 @@ export function generatePowerForecast(
   const housePriority = getBuildingPriority('house', priorityOverrides);
   const factoryPriority = getBuildingPriority('factory', priorityOverrides);
   const lightingPriority = 2 as PriorityLevel;
+  const windmillEfficiency = WINDMILL_PRIORITY_EFFICIENCY[getBuildingPriority('windmill', priorityOverrides)];
+  const batteryDepth = BATTERY_PRIORITY_DEPTH[getBuildingPriority('battery', priorityOverrides)];
 
   let projectedStorage = currentStoredPower;
 
@@ -528,14 +538,15 @@ export function generatePowerForecast(
     const forecastTime = ((currentDayTime + i * FORECAST_TICK_STEP) % DAY_LENGTH + DAY_LENGTH) % DAY_LENGTH;
     const phase = getTimePhase(forecastTime);
 
-    const baseGen = windmillCount * getWindmillGeneration(forecastTime, 5, 1);
+    const baseGen = windmillCount * getWindmillGeneration(forecastTime, 5, 1) * windmillEfficiency;
     const houseDemand = houseCount * getHouseConsumption(forecastTime, BUILDING_STATS.house.consumption);
     const factoryDemand =
       factoryCount * getFactoryConsumption(forecastTime, BUILDING_STATS.factory.consumption);
     const lightingDemand = getLightingConsumption(forecastTime, houseCount, factoryCount);
     const totalDemand = houseDemand + factoryDemand + lightingDemand;
 
-    const batteryDischargeAvail = Math.max(0, projectedStorage);
+    const minReserve = batteryCapacity * (1 - batteryDepth);
+    const batteryDischargeAvail = Math.max(0, projectedStorage - minReserve);
     const totalAvailPower = baseGen + batteryDischargeAvail;
 
     const demandsByPriority: Array<{ priority: PriorityLevel; demand: number; type: string }> = [
@@ -573,8 +584,9 @@ export function generatePowerForecast(
       projectedStorage = Math.min(batteryCapacity, projectedStorage + netPower * 0.3);
     } else if (netPower < 0) {
       const deficit = -netPower;
-      const discharge = Math.min(projectedStorage, deficit * 0.5);
-      projectedStorage = Math.max(0, projectedStorage - discharge);
+      const maxDischarge = Math.max(0, projectedStorage - minReserve);
+      const discharge = Math.min(maxDischarge, deficit * 0.5);
+      projectedStorage = Math.max(minReserve, projectedStorage - discharge);
     }
 
     forecast.push({
